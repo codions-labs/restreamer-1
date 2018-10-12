@@ -127,6 +127,9 @@ type Configuration struct {
 	Resources []Resource `json:"resources"`
 	// Notifications defines event callbacks.
 	Notifications []Notification `json:"notifications"`
+	// CacheSize is the number of packets to precache to boost client stream
+	// startup time.
+	CacheSize uint `json:"cachesize"`
 }
 
 // DefaultConfiguration creates and returns a configuration object

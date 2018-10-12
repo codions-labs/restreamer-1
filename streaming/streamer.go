@@ -102,6 +102,8 @@ type Streamer struct {
 	events event.Notifiable
 	// auth is an authentication verifier for client requests
 	auth protocol.Authenticator
+	// cacheSize is the number of bytes to keep in precache
+	cacheSize int
 }
 
 // ConnectionBroker represents a policy handler for new connections.
@@ -119,9 +121,10 @@ type ConnectionBroker interface {
 // NewStreamer creates a new packet streamer.
 // queue is an input packet queue.
 // qsize is the length of each connection's queue (in packets).
+// cachesize is the size of the precache buffer, in number of packets
 // broker handles policy enforcement
 // stats is a statistics collector object.
-func NewStreamer(qsize uint, broker ConnectionBroker, auth protocol.Authenticator) *Streamer {
+func NewStreamer(qsize uint, cachesize uint, broker ConnectionBroker, auth protocol.Authenticator) *Streamer {
 	streamer := &Streamer{
 		broker:    broker,
 		queueSize: int(qsize),
@@ -129,6 +132,7 @@ func NewStreamer(qsize uint, broker ConnectionBroker, auth protocol.Authenticato
 		stats:     &api.DummyCollector{},
 		request:   make(chan *ConnectionRequest),
 		auth:      auth,
+		cacheSize: int(cachesize) * mpegts.PacketSize,
 	}
 	// start the command eater
 	go streamer.eatCommands()
@@ -211,6 +215,9 @@ func (streamer *Streamer) Stream(queue <-chan mpegts.Packet) error {
 		Command: streamerCommandStart,
 	}
 
+	// prepare the precache buffer
+	precache := util.CreateSlidingWindow(streamer.cacheSize)
+
 	logger.Logkv(
 		"event", eventStreamerStart,
 		"message", "Starting streaming",
@@ -225,6 +232,8 @@ func (streamer *Streamer) Stream(queue <-chan mpegts.Packet) error {
 				// got a packet, distribute
 				//log.Printf("Got packet (length %d):\n%s\n", len(packet), hex.Dump(packet))
 				//log.Printf("Got packet (length %d)\n", len(packet))
+
+				precache.Put(packet)
 
 				for conn, _ := range pool {
 					select {
@@ -269,6 +278,9 @@ func (streamer *Streamer) Stream(queue <-chan mpegts.Packet) error {
 					)
 					pool[request.Connection] = true
 					request.Ok = true
+					// write precached data
+					// TODO maybe don't write this directly, use the queue?
+					request.Connection.writer.Write(precache.Get())
 				} else {
 					logger.Logkv(
 						"event", eventStreamerError,
